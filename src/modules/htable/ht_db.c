@@ -25,6 +25,7 @@
 #include "../../core/usr_avp.h"
 #include "../../core/ut.h"
 #include "../../lib/srdb1/db.h"
+#include "../../lib/srdb1/db_ut.h"
 
 #include "ht_db.h"
 
@@ -107,6 +108,9 @@ int ht_db_close_con(void)
 
 #define HT_NAME_BUF_SIZE 256
 static char ht_name_buf[HT_NAME_BUF_SIZE];
+
+#define HT_KEY_BUF_SIZE 32
+static char ht_key_buf[HT_KEY_BUF_SIZE];
 
 static int ht_pack_values(
 		ht_t *ht, db1_res_t *db_res, int row, int cols, str *hvalue)
@@ -317,8 +321,64 @@ int ht_db_load_table(ht_t *ht, str *dbtable, int mode)
 					}
 					kname.len = strlen(kname.s);
 					break;
+				case DB1_INT:
+					if(RES_ROWS(db_res)[i].values[0].nul) {
+						LM_ERR("htable [%.*s] row [%d] has NULL key\n",
+								ht->name.len, ht->name.s, i);
+						goto error;
+					}
+					kname.len = HT_KEY_BUF_SIZE;
+					if(db_int2str(RES_ROWS(db_res)[i].values[0].val.int_val, ht_key_buf, &kname.len) < 0) {
+						LM_ERR("htable [%.*s] row [%d]: error while converting DB int to string\n",
+							ht->name.len, ht->name.s, i);
+						goto error;
+					}
+					kname.s = ht_key_buf;
+					break;
+				case DB1_UINT:
+					if(RES_ROWS(db_res)[i].values[0].nul) {
+						LM_ERR("htable [%.*s] row [%d] has NULL key\n",
+								ht->name.len, ht->name.s, i);
+						goto error;
+					}
+					kname.len = HT_KEY_BUF_SIZE;
+					if(db_uint2str(RES_ROWS(db_res)[i].values[0].val.uint_val, ht_key_buf, &kname.len) < 0) {
+						LM_ERR("htable [%.*s] row [%d]: error while converting DB unsigned int to string\n",
+							ht->name.len, ht->name.s, i);
+						goto error;
+					}
+					kname.s = ht_key_buf;
+					break;
+				case DB1_BIGINT:
+					if(RES_ROWS(db_res)[i].values[0].nul) {
+						LM_ERR("htable [%.*s] row [%d] has NULL key\n",
+								ht->name.len, ht->name.s, i);
+						goto error;
+					}
+					kname.len = HT_KEY_BUF_SIZE;
+					if(db_longlong2str(RES_ROWS(db_res)[i].values[0].val.ll_val, ht_key_buf, &kname.len) < 0) {
+						LM_ERR("htable [%.*s] row [%d]: error while converting DB big signed int to string\n",
+							ht->name.len, ht->name.s, i);
+						goto error;
+					}
+					kname.s = ht_key_buf;
+					break;
+				case DB1_UBIGINT:
+					if(RES_ROWS(db_res)[i].values[0].nul) {
+						LM_ERR("htable [%.*s] row [%d] has NULL key\n",
+								ht->name.len, ht->name.s, i);
+						goto error;
+					}
+					kname.len = HT_KEY_BUF_SIZE;
+					if(db_ulonglong2str(RES_ROWS(db_res)[i].values[0].val.ull_val, ht_key_buf, &kname.len) < 0) {
+						LM_ERR("htable [%.*s] row [%d]: error while converting DB big unsigned int to string\n",
+							ht->name.len, ht->name.s, i);
+						goto error;
+					}
+					kname.s = ht_key_buf;
+					break;
 				default:
-					LM_ERR("key type must be string (type=%d)\n",
+					LM_ERR("key type unsupported (type=%d)\n",
 							RES_ROWS(db_res)[i].values[0].type);
 					goto error;
 			}
