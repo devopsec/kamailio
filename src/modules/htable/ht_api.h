@@ -30,7 +30,7 @@
 #include "../../core/atomic_ops.h"
 
 #define ht_compute_hash(_s) core_case_hash(_s, 0, 0)
-#define ht_get_entry(_h, _size) (_h) & ((_size)-1)
+#define ht_get_entry(_h, _size) (_h) & ((_size) - 1)
 
 typedef struct _ht_cell
 {
