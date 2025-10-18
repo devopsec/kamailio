@@ -33,7 +33,7 @@
 
 
 #define ds_compute_hash(_s) core_case_hash(_s, 0, 0)
-#define ds_get_entry(_h, _size) (_h) & ((_size)-1)
+#define ds_get_entry(_h, _size) (_h) & ((_size) - 1)
 
 
 ds_cell_t *ds_cell_new(str *cid, str *duid, int dset, unsigned int cellid)
