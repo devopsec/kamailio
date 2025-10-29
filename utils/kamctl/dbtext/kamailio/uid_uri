@@ -1,1 +1,1 @@
-id(int,auto) uid(string) did(string) username(string) flags(int) scheme(string) 
+id(int) uid(string) did(string) username(string) flags(int) scheme(string) 

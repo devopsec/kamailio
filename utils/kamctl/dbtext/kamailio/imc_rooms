@@ -1,1 +1,1 @@
-id(int,auto) name(string) domain(string) flag(int) 
+id(int) name(string) domain(string) flag(int) 

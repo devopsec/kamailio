@@ -1,1 +1,1 @@
-id(int,auto) did(string) domain(string) flags(int) 
+id(int) did(string) domain(string) flags(int) 

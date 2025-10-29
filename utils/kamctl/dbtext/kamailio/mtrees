@@ -1,1 +1,1 @@
-id(int,auto) tname(string) tprefix(string) tvalue(string) 
+id(int) tname(string) tprefix(string) tvalue(string) 

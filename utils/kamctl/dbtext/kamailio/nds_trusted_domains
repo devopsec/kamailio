@@ -1,1 +1,1 @@
-id(int,auto) trusted_domain(string) 
+id(int) trusted_domain(string) 

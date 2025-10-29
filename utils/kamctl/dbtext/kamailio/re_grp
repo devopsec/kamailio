@@ -1,1 +1,1 @@
-id(int,auto) reg_exp(string) group_id(int) 
+id(int) reg_exp(string) group_id(int) 

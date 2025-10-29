@@ -11,7 +11,7 @@ CREATE TABLE pcscf_location (
     rinstance VARCHAR2(255) DEFAULT NULL,
     rx_session_id VARCHAR2(256) DEFAULT NULL,
     reg_state NUMBER(5) DEFAULT NULL,
-    expires DATE DEFAULT to_date('2030-05-28 21:32:15','yyyy-mm-dd hh24:mi:ss'),
+    expires DATE DEFAULT '2030-05-28 21:32:15',
     service_routes VARCHAR2(2048) DEFAULT NULL,
     socket VARCHAR2(64) DEFAULT NULL,
     public_ids VARCHAR2(2048) DEFAULT NULL,
@@ -58,3 +58,4 @@ BEGIN map2users('pcscf_location'); END;
 CREATE INDEX pcscf_location_aor_idx  ON pcscf_location (aor);
 
 INSERT INTO version (table_name, table_version) values ('pcscf_location','7');
+

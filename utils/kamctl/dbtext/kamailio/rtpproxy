@@ -1,1 +1,1 @@
-id(int,auto) setid(string) url(string) flags(int) weight(int) description(string) 
+id(int) setid(string) url(string) flags(int) weight(int) description(string) 

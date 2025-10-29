@@ -1,1 +1,1 @@
-id(int,auto) gwlist(string) description(string) 
+id(int) gwlist(string) description(string) 

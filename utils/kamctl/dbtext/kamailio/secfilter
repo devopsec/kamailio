@@ -1,1 +1,1 @@
-id(int,auto) action(int) type(int) data(string) 
+id(int) action(int) type(int) data(string) 

@@ -1,1 +1,1 @@
-id(int,auto) domain(string,null) 
+id(int) domain(string,null) 

@@ -1,1 +1,1 @@
-id(int,auto) domain(string) did(string,null) last_modified(int) 
+id(int) domain(string) did(string,null) last_modified(int) 

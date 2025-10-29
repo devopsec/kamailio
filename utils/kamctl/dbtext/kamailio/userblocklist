@@ -1,1 +1,1 @@
-id(int,auto) username(string) domain(string) prefix(string) allowlist(int) 
+id(int) username(string) domain(string) prefix(string) allowlist(int) 

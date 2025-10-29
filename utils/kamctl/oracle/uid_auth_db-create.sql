@@ -7,7 +7,7 @@ CREATE TABLE uid_credentials (
     flags NUMBER(10) DEFAULT 0 NOT NULL,
     ha1 VARCHAR2(32),
     ha1b VARCHAR2(32) DEFAULT '',
-    uuid VARCHAR2(64)
+    uid VARCHAR2(64)
 );
 
 CREATE OR REPLACE TRIGGER uid_credentials_tr
@@ -19,7 +19,7 @@ END uid_credentials_tr;
 BEGIN map2users('uid_credentials'); END;
 /
 CREATE INDEX uid_credentials_cred_idx  ON uid_credentials (auth_username, did);
-CREATE INDEX uid_credentials_uuid  ON uid_credentials (uuid);
+CREATE INDEX uid_credentials_uid  ON uid_credentials (uid);
 CREATE INDEX uid_credentials_did_idx  ON uid_credentials (did);
 CREATE INDEX uid_credentials_realm_idx  ON uid_credentials (realm);
 
