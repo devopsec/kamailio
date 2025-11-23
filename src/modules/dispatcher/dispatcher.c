@@ -84,6 +84,7 @@ str hash_pvar_param = STR_NULL;
 
 str ds_xavp_dst_addr = str_init("uri");
 str ds_xavp_dst_grp = str_init("grp");
+str ds_xavp_dst_dstidx = str_init("dstidx");
 str ds_xavp_dst_dstid = str_init("dstid");
 str ds_xavp_dst_attrs = str_init("attrs");
 str ds_xavp_dst_sock = str_init("sock");
@@ -2035,10 +2036,13 @@ int ds_rpc_print_set(
 		else
 			c[1] = 'X';
 
-		if(rpc->struct_add(vh, "SsdS", "URI", &node->dlist[j].uri, "FLAGS", c,
-				   "PRIORITY", node->dlist[j].priority, "IUID",
-				   &node->dlist[j].suid)
-				< 0) {
+		if(rpc->struct_add(vh, "dSsdS",
+			"IDX", j,
+			"URI", &node->dlist[j].uri,
+			"FLAGS", c,
+			"PRIORITY", node->dlist[j].priority,
+			"IUID", &node->dlist[j].suid
+			) < 0) {
 			rpc->fault(ctx, 500, "Internal error creating dest struct");
 			return -1;
 		}
