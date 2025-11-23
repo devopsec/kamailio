@@ -120,6 +120,7 @@ extern int ds_xavp_ctx_mode;
 
 extern str ds_xavp_dst_addr;
 extern str ds_xavp_dst_grp;
+extern str ds_xavp_dst_dstidx;
 extern str ds_xavp_dst_dstid;
 extern str ds_xavp_dst_attrs;
 extern str ds_xavp_dst_sock;

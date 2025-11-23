@@ -2276,6 +2276,16 @@ int ds_add_xavp_record(
 		return -1;
 	}
 
+	/* add dstidx field */
+	memset(&nxval, 0, sizeof(sr_xval_t));
+	nxval.type = SR_XTYPE_LONG;
+	nxval.v.l = pos;
+	if(xavp_add_value(&ds_xavp_dst_dstidx, &nxval, &nxavp) == NULL) {
+		xavp_destroy_list(&nxavp);
+		LM_ERR("failed to add destination dstidx xavp field\n");
+		return -1;
+	}
+
 	if(((ds_xavp_dst_mode & DS_XAVP_DST_SKIP_ATTRS) == 0)
 			&& (dsidx->dlist[pos].attrs.body.len > 0)) {
 		memset(&nxval, 0, sizeof(sr_xval_t));
