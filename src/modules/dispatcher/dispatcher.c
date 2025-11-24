@@ -70,6 +70,19 @@ MODULE_VERSION
 #define DS_DEST_ATTRS_COL		"attrs"
 #define DS_TABLE_NAME			"dispatcher"
 
+#define FAKE_SIP_REQ_FORMAT												\
+"%.*s %.*s SIP/2.0\r\nVia: SIP/2.0/UDP 127.0.0.1\r\nFrom: %.*s\r\n"		\
+"To: %.*s\r\nCall-ID: %.*s\r\nCSeq: 1 %.*s\r\nContent-Length: 0\r\n\r\n"
+
+#define FAKE_REQ_ATTRS_DEF {								\
+	.method = str_init("INVITE"),							\
+	.ruri = str_init("sip:test@127.0.0.1:5060"),			\
+	.furi = str_init("sip:test@127.0.0.1:5060;tag=123"),	\
+	.turi = str_init("sip:test@127.0.0.1:5060"),			\
+	.callid = str_init("123"),								\
+	.authuri = STR_NULL,									\
+}
+
 /** parameters */
 char *dslistfile = CFG_DIR"dispatcher.list";
 int  ds_force_dst   = 1;
@@ -2386,6 +2399,329 @@ static void dispatcher_rpc_oclist(rpc_t *rpc, void *ctx)
 	}
 }
 
+/**
+ * Fields that can be configured for the faked request
+ * Used as the SIP msg when testing the ds_* route cmds via RPC
+ */
+typedef struct dispatcher_rpc_fake_request_attrs
+{
+	str method;
+	str ruri;
+	str furi;
+	str turi;
+	str callid;
+	str authuri;
+} dispatcher_rpc_fake_request_attrs_t;
+
+/**
+ * RPC command to test ds_select() route command
+ * Shows what the results would be with current state and a faked request
+ */
+static void dispatcher_rpc_ds_select(rpc_t *rpc, void *ctx)
+{
+	int dst_set;
+	int dst_alg;
+	int dst_limit = 0;
+	int n_args = 0;
+	char faked_msg_buf[BUF_SIZE];
+	void *rpc_root, *rpc_currdsts, *rpc_nextdsts, *rpc_dst;
+	sip_uri_t tmp_uri;
+	sip_msg_t faked_msg;
+	dispatcher_rpc_fake_request_attrs_t def_attrs = FAKE_REQ_ATTRS_DEF;
+	dispatcher_rpc_fake_request_attrs_t req_attrs = FAKE_REQ_ATTRS_DEF;
+	sr_xavp_t *ds_xavp = NULL;
+	sr_xavp_t *xavp_dsturi = NULL;
+	sr_xavp_t *xavp_dstidx = NULL;
+	ds_hres_t hres;
+
+	// parse and validate arguments
+	n_args = rpc->scan(ctx, "dd*dSSSS.SS", &dst_set, &dst_alg, &dst_limit,
+		&req_attrs.method, &req_attrs.ruri, &req_attrs.furi,
+		&req_attrs.turi, &req_attrs.callid, &req_attrs.authuri);
+	if(n_args < 2 || n_args > 9) {
+		rpc->fault(ctx, 400, "Invalid number of arguments (see help)");
+		return;
+	}
+	if (n_args > 2 && n_args < 9) {
+		/* rpc_scan overwrites next string with error message when parsing
+		 * optional args, so we reset the last optional arg if needed */
+		switch(n_args) {
+			case 3:
+				req_attrs.method = def_attrs.method;
+				break;
+			case 4:
+				req_attrs.ruri = def_attrs.ruri;
+				break;
+			case 5:
+				req_attrs.furi = def_attrs.furi;
+				break;
+			case 6:
+				req_attrs.turi = def_attrs.turi;
+				break;
+			case 7:
+				req_attrs.callid = def_attrs.callid;
+				break;
+			case 8:
+				req_attrs.authuri = def_attrs.authuri;
+				break;
+		}
+	}
+
+	if (req_attrs.method.len == 0) {
+		rpc->fault(ctx, 400, "Empty request method");
+		return;
+	}
+	switch(req_attrs.method.s[0]) {
+		case 'R':
+		case 'r':
+			if(strncasecmp(req_attrs.method.s + 1, "egister", 7)) {
+				req_attrs.method.s = "REGISTER";
+			}
+			else if(strncasecmp(req_attrs.method.s + 1, "efer", 4)) {
+				req_attrs.method.s = "REFER";
+			}
+			break;
+		case 'A':
+		case 'a':
+			if(strncasecmp(req_attrs.method.s + 1, "ck", 2)) {
+				req_attrs.method.s = "ACK";
+			}
+			break;
+		case 'I':
+		case 'i':
+			if(strncasecmp(req_attrs.method.s + 1, "nvite", 5)) {
+				req_attrs.method.s = "INVITE";
+			}
+			else if(strncasecmp(req_attrs.method.s + 1, "nfo", 3)) {
+				req_attrs.method.s = "INFO";
+			}
+			break;
+		case 'P':
+		case 'p':
+			if(strncasecmp(req_attrs.method.s + 1, "rack", 4)) {
+				req_attrs.method.s = "PRACK";
+			}
+			else if(strncasecmp(req_attrs.method.s + 1, "ublish", 6)) {
+				req_attrs.method.s = "PUBLISH";
+			}
+			break;
+		case 'C':
+		case 'c':
+			if(strncasecmp(req_attrs.method.s + 1, "ancel", 5)) {
+				req_attrs.method.s = "CANCEL";
+			}
+			break;
+		case 'B':
+		case 'b':
+			if(strncasecmp(req_attrs.method.s + 1, "ye", 2)) {
+				req_attrs.method.s = "BYE";
+			}
+			break;
+		case 'M':
+		case 'm':
+			if(strncasecmp(req_attrs.method.s + 1, "essage", 6)) {
+				req_attrs.method.s = "MESSAGE";
+			}
+			break;
+		case 'O':
+		case 'o':
+			if(strncasecmp(req_attrs.method.s + 1, "ptions", 6)) {
+				req_attrs.method.s = "OPTIONS";
+			}
+			break;
+		case 'S':
+		case 's':
+			if(strncasecmp(req_attrs.method.s + 1, "ubscribe", 8)) {
+				req_attrs.method.s = "SUBSCRIBE";
+			}
+			break;
+		case 'N':
+		case 'n':
+			if(strncasecmp(req_attrs.method.s + 1, "otify", 5)) {
+				req_attrs.method.s = "NOTIFY";
+			}
+			break;
+		case 'U':
+		case 'u':
+			if(strncasecmp(req_attrs.method.s + 1, "pdate", 5)) {
+				req_attrs.method.s = "UPDATE";
+			}
+			break;
+		case 'K':
+		case 'k':
+			if(strncasecmp(req_attrs.method.s + 1, "dmq", 3)) {
+				req_attrs.method.s = "KDMQ";
+			}
+			break;
+		default:
+			rpc->fault(ctx, 400, "invalid request method \"%s\"",
+				req_attrs.method.s);
+			return;
+	}
+
+	if(parse_uri(req_attrs.ruri.s, req_attrs.ruri.len, &tmp_uri) < 0) {
+		rpc->fault(ctx, 400, "Invalid request uri \"%s\"",
+			req_attrs.ruri.s);
+		return;
+	}
+
+	if(parse_uri(req_attrs.furi.s, req_attrs.furi.len, &tmp_uri) < 0) {
+		rpc->fault(ctx, 400, "Invalid From uri \"%s\"",
+			req_attrs.furi.s);
+		return;
+	}
+
+	if(parse_uri(req_attrs.turi.s, req_attrs.turi.len, &tmp_uri) < 0) {
+		rpc->fault(ctx, 400, "Invalid To uri \"%s\"",
+			req_attrs.turi.s);
+		return;
+	}
+
+	if (req_attrs.callid.len == 0) {
+		rpc->fault(ctx, 400, "Invalid Call ID \"%s\"",
+			req_attrs.callid.s);
+		return;
+	}
+
+	if(req_attrs.authuri.len > 0) {
+		rpc->fault(ctx, 501, "Auth uri is not yet implemented");
+		return;
+	}
+	// 	&&
+	// 	parse_uri(req_attrs.authuri.s, req_attrs.authuri.len, &tmp_uri) < 0) {
+	// 	rpc->fault(ctx, 400, "Invalid auth uri \"%s\"",
+	// 		req_attrs.authuri.s);
+	// 	return;
+	// }
+
+	// create the SIP message
+	memset(&faked_msg, 0, sizeof(sip_msg_t));
+	memset(faked_msg_buf, 0, BUF_SIZE);
+
+	faked_msg.len = snprintf(faked_msg_buf, BUF_SIZE, FAKE_SIP_REQ_FORMAT,
+		req_attrs.method.len, req_attrs.method.s,
+		req_attrs.ruri.len, req_attrs.ruri.s,
+		req_attrs.furi.len, req_attrs.furi.s,
+		req_attrs.turi.len, req_attrs.turi.s,
+		req_attrs.callid.len, req_attrs.callid.s,
+		req_attrs.method.len, req_attrs.method.s);
+	faked_msg.buf = faked_msg_buf;
+	LM_DBG("faked msg:\n%s\n", faked_msg_buf);
+
+	faked_msg.set_global_address = default_global_address;
+	faked_msg.set_global_port = default_global_port;
+
+	if(parse_msg(faked_msg.buf, faked_msg.len, &faked_msg) != 0) {
+		rpc->fault(ctx, 500, "Failed crafting faked message");
+		return;
+	}
+
+	faked_msg.rcv.proto = PROTO_UDP;
+	faked_msg.rcv.src_port = 5060;
+	faked_msg.rcv.src_ip.u.addr32[0] = 0x7f000001;
+	faked_msg.rcv.src_ip.af = AF_INET;
+	faked_msg.rcv.src_ip.len = 4;
+	faked_msg.rcv.dst_port = 5060;
+	faked_msg.rcv.dst_ip.u.addr32[0] = 0x7f000001;
+	faked_msg.rcv.dst_ip.af = AF_INET;
+	faked_msg.rcv.dst_ip.len = 4;
+
+	// /* add the auth credentials */
+	// if(req_attrs.authuri.len > 0) {
+	// 	new_credentials()
+	// 	// add to faked_msg
+	// }
+
+	/*
+	 * clear the environment prior to running (simulate new request)
+	 * environment is left intact after for other rpc commands to use
+	 */
+	reset_avps();
+	xavp_reset_list();
+
+	hres = ds_select_dst_limit(&faked_msg, dst_set, dst_alg,
+		(unsigned int)dst_limit, DS_SETOP_XAVP);
+	if (hres.ret < 0) {
+		rpc->fault(ctx, 500, "Failed selecting destination");
+		goto end;
+	}
+
+	/* grab the results */
+	if(rpc->add(ctx, "{", &rpc_root) < 0) {
+		rpc->fault(ctx, 500, "Internal error root structure");
+		goto end;
+	}
+	if(rpc->struct_add(rpc_root, "[", "currdsts", &rpc_currdsts) < 0) {
+		rpc->fault(ctx, 500, "Internal error currdsts structure");
+		goto end;
+	}
+	if(rpc->struct_add(rpc_root, "[", "nextdsts", &rpc_nextdsts) < 0) {
+		rpc->fault(ctx, 500, "Internal error currdsts structure");
+		goto end;
+	}
+
+	if(faked_msg.dst_uri.len > 0) {
+		if(rpc->struct_add(rpc_currdsts, "{", &rpc_dst) < 0) {
+			rpc->fault(ctx, 500, "Internal error dst structure");
+			goto end;
+		}
+		if(rpc->struct_add(rpc_dst, "dS",
+			"idx", hres.hash,
+			"uri", &faked_msg.dst_uri) < 0) {
+			rpc->fault(ctx, 500, "Internal error dst structure");
+			goto end;
+		}
+	}
+
+	// TODO: handle grabbing results from branches (e.x. parallel alg)
+
+	/* no failover destinations */
+	if(!(ds_flags & DS_FAILOVER_ON) || ds_xavp_dst.len <= 0) {
+		goto end;
+	}
+
+	ds_xavp = xavp_get(&ds_xavp_dst, NULL);
+	if (ds_xavp == NULL) {
+		rpc->fault(ctx, 500, "failed acquiring ds_xavp_dst");
+		goto end;
+	}
+
+	do {
+		if(ds_xavp->val.type != SR_XTYPE_XAVP) {
+			rpc->fault(ctx, 500, "Internal error can not parse xavp");
+			goto end;
+		}
+		if(rpc->struct_add(rpc_nextdsts, "{", &rpc_dst) < 0) {
+			rpc->fault(ctx, 500, "Internal error dst structure");
+			goto end;
+		}
+
+		xavp_dstidx = xavp_get_child_with_ival(&ds_xavp_dst,
+			&ds_xavp_dst_dstidx);
+		xavp_dsturi = xavp_get_child_with_sval(&ds_xavp_dst,
+			&ds_xavp_dst_addr);
+		if(rpc->struct_add(rpc_dst, "dS",
+			"idx", (unsigned int)xavp_dstidx->val.v.l,
+			"uri", &xavp_dsturi->val.v.s
+			) < 0) {
+			rpc->fault(ctx, 500, "Internal error dst structure");
+			goto end;
+		}
+
+		ds_xavp = xavp_get_next(ds_xavp);
+	} while (ds_xavp != NULL);
+
+end:
+	free_sip_msg(&faked_msg);
+}
+
+static const char *dispatcher_rpc_ds_select_doc[2] = {
+	"Summary:\tShow the destination results if ds_select() was ran\n"
+	"Usage:\tdispatcher.ds_select __dst_set__ __dst_alg__ [__dst_limit__] "
+	"[__method__] [__ruri__] [__furi__] [__turi__] [__callid__] [__authuri__]",
+	0
+};
+
 /* clang-format off */
 rpc_export_t dispatcher_rpc_cmds[] = {
 	{"dispatcher.reload", dispatcher_rpc_reload,
@@ -2406,6 +2742,8 @@ rpc_export_t dispatcher_rpc_cmds[] = {
 		dispatcher_rpc_hash_doc, 0},
 	{"dispatcher.oclist", dispatcher_rpc_oclist,
 		dispatcher_rpc_oclist_doc, RPC_RET_ARRAY},
+	{"dispatcher.ds_select", dispatcher_rpc_ds_select,
+		dispatcher_rpc_ds_select_doc, RPC_RET_ARRAY},
 	{0, 0, 0, 0}
 };
 /* clang-format on */
