@@ -92,6 +92,9 @@
 #define DS_EVRTMODE_OPTIONS 1
 #define DS_EVRTMODE_INIT 2
 
+#define DS_SWRR_REBALANCE_OFF	0
+#define DS_SWRR_REBALANCE_ON	1
+
 /* clang-format on */
 typedef struct ds_rctx
 {
@@ -157,6 +160,8 @@ extern str ds_default_socket;
 extern str ds_default_sockname;
 extern str ds_ping_socket;
 extern struct socket_info *ds_default_sockinfo;
+
+extern int ds_swrr_mode;
 
 int ds_init_data(void);
 int ds_init_db(void);
@@ -226,6 +231,8 @@ typedef struct _ds_attrs {
 	int maxload;
 	int weight;
 	int rweight;
+	unsigned int sweight;
+	int csweight;
 	int congestion_control;
 	str ping_from;
 	str obproxy;
@@ -258,6 +265,13 @@ typedef struct _ds_ocdata {
 	uint32_t ocmax;
 } ds_ocdata_t;
 
+typedef struct _ds_swrr_data {
+	unsigned int *swlist;	/*!< list of destinations */
+	unsigned int len;		/*!< length of swlist */
+	unsigned int last;		/*!< last picked destination */
+	unsigned int swtot;		/*!< sum of sweights in set */
+} ds_swrr_data_t;
+
 typedef struct _ds_dest {
 	str uri;          /*!< address/uri */
 	str host;         /*!< shortcut to host part */
@@ -288,6 +302,7 @@ typedef struct _ds_set {
 	ds_dest_t *dlist;
 	unsigned int wlist[100];
 	unsigned int rwlist[100];
+	ds_swrr_data_t swdata;	/*!< data for swrr algorithm */
 	struct _ds_set *next[2];
 	int longer;
 	int rrserial;		/*!< round-robin or serial flag */

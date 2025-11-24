@@ -129,6 +129,7 @@ int ds_load_mode = 0;
 uint32_t ds_dns_mode = DS_DNS_MODE_INIT;
 static int ds_dns_interval = 600;
 int ds_dns_ttl = 0;
+int ds_swrr_mode = 0;
 
 str ds_outbound_proxy = STR_NULL;
 
@@ -332,6 +333,7 @@ static param_export_t params[]={
 	{"ds_dns_mode",        PARAM_INT, &ds_dns_mode},
 	{"ds_dns_interval",    PARAM_INT, &ds_dns_interval},
 	{"ds_dns_ttl",         PARAM_INT, &ds_dns_ttl},
+	{"ds_swrr_mode",		PARAM_INT, &ds_swrr_mode},
 	{0,0,0}
 };
 
@@ -361,6 +363,14 @@ static int mod_init(void)
 	param_hooks_t phooks;
 	param_t *pit = NULL;
 
+	switch(ds_swrr_mode) {
+		case DS_SWRR_REBALANCE_OFF:
+		case DS_SWRR_REBALANCE_ON:
+			break;
+		default:
+			LM_ERR("invalid value for ds_swrr_mode\n");
+			return -1;
+	}
 	if(ds_dns_mode & DS_DNS_MODE_TIMER) {
 		if(ds_dns_interval <= 0) {
 			LM_WARN("dns interval parameter not set - using 600\n");
@@ -1971,7 +1981,7 @@ int ds_rpc_print_set(
 				rpc->fault(ctx, 500, "Internal error creating dest struct");
 				return -1;
 			}
-			if(rpc->struct_add(wh, "SSddddSSSSjj", "BODY",
+			if(rpc->struct_add(wh, "SSdddddSSSSjj", "BODY",
 					   &(node->dlist[j].attrs.body), "DUID",
 					   (node->dlist[j].attrs.duid.s)
 							   ? &(node->dlist[j].attrs.duid)
@@ -1979,7 +1989,9 @@ int ds_rpc_print_set(
 					   "PROBING_COUNT", node->dlist[j].probing_count, "MAXLOAD",
 					   node->dlist[j].attrs.maxload, "WEIGHT",
 					   node->dlist[j].attrs.weight, "RWEIGHT",
-					   node->dlist[j].attrs.rweight, "SOCKET",
+					   node->dlist[j].attrs.rweight, "SWEIGHT",
+					   node->dlist[j].attrs.sweight, "CSWEIGHT",
+					   node->dlist[j].attrs.csweight, "SOCKET",
 					   (node->dlist[j].attrs.socket.s)
 							   ? &(node->dlist[j].attrs.socket)
 							   : &data,

@@ -83,6 +83,7 @@
 #define DS_ALG_PARALLEL 12
 #define DS_ALG_LATENCY 13
 #define DS_ALG_RRSERIAL 14
+#define DS_ALG_SWRR 15
 #define DS_ALG_OVERLOAD 64 /* 2^6 - can be also used as a flag */
 
 #define DS_HN_SIZE 256
@@ -155,6 +156,8 @@ void shuffle_uint100array(unsigned int *arr);
 void shuffle_char100array(char *arr);
 int ds_reinit_rweight_on_state_change(
 		int old_state, int new_state, ds_set_t *dset);
+int ds_reinit_sweight_on_state_change(
+	int old_state, int new_state, ds_set_t *dset);
 
 
 /**
@@ -274,11 +277,12 @@ void ds_iter_set(ds_set_t *node,
 
 void ds_log_dst_cb(ds_set_t *node, int i, void *arg)
 {
-	LM_DBG("dst>> %d %.*s %d %d (%.*s,%d,%d,%d)\n", node->id,
+	LM_DBG("dst>> %d %.*s %d %d (%.*s,%d,%d,%d,%d,%d)\n", node->id,
 			node->dlist[i].uri.len, node->dlist[i].uri.s, node->dlist[i].flags,
 			node->dlist[i].priority, node->dlist[i].attrs.duid.len,
 			node->dlist[i].attrs.duid.s, node->dlist[i].attrs.maxload,
-			node->dlist[i].attrs.weight, node->dlist[i].attrs.rweight);
+			node->dlist[i].attrs.weight, node->dlist[i].attrs.rweight,
+			node->dlist[i].attrs.sweight, node->dlist[i].attrs.csweight);
 }
 
 /**
@@ -431,6 +435,9 @@ int ds_set_attrs(ds_dest_t *dest, str *vattrs)
 		} else if(pit->name.len == 6
 				  && strncasecmp(pit->name.s, "ocrate", 6) == 0) {
 			str2int(&pit->body, &dest->ocdata.ocrate);
+		} else if(pit->name.len == 7
+				  && strncasecmp(pit->name.s, "sweight", 7) == 0) {
+			str2int(&pit->body, &dest->attrs.sweight);
 		}
 	}
 	if(dest->ocdata.ocmax > 100) {
@@ -1013,6 +1020,206 @@ randomize:
 	return 0;
 }
 
+typedef struct {
+	unsigned int sweight;
+	int csweight;
+	unsigned int index;	// original from dset->dlist
+} swrr_dest_t;
+
+typedef struct {
+	swrr_dest_t *dlist;
+	unsigned int len;
+	unsigned int swtot;
+} swrr_set_t;
+
+/**
+ * Smooth Weighted Round-Robin algorithm
+ * - increase weight of each dst by sweight
+ * - select dest with the largest weight
+ * - reduce selected dest weight by total sweight
+ * - return selected dest index (original in dset->dlist)
+ */
+static inline unsigned int swrr_select_next(swrr_set_t *iset)
+{
+	int wmax = INT_MIN;
+	unsigned int i = 0;
+	unsigned int wsel = 0;
+
+	for(; i < iset->len; i++) {
+		iset->dlist[i].csweight += iset->dlist[i].sweight;
+		if(iset->dlist[i].csweight > wmax) {
+			wmax = iset->dlist[i].csweight;
+			wsel = i;
+		}
+	}
+
+	iset->dlist[wsel].csweight -= iset->swtot;
+	return iset->dlist[wsel].index;
+}
+
+/**
+ * Select next destination using SWRR algorithm given a destination set
+ */
+static inline unsigned int swrr_select_next_dst(ds_set_t *dset)
+{
+	int wmax = INT_MIN;
+	unsigned int k;
+	unsigned int i = 0;
+	unsigned int wsel = 0;
+
+	for(; i < dset->swdata.len; i++) {
+		k = dset->swdata.swlist[i];
+		dset->dlist[k].attrs.csweight += dset->dlist[k].attrs.sweight;
+		if(dset->dlist[k].attrs.csweight > wmax) {
+			wmax = dset->dlist[k].attrs.csweight;
+			wsel = k;
+		}
+	}
+
+	dset->dlist[wsel].attrs.csweight -= dset->swdata.swtot;
+	return wsel;
+}
+
+/**
+ * Update csweights as in swrr_select_next_dst(), dest has already been chosen
+ */
+static inline void swrr_update_csweights(ds_set_t *dset, unsigned int dstidx)
+{
+	unsigned int k;
+	unsigned int i = 0;
+
+	for(; i < dset->swdata.len; i++) {
+		k = dset->swdata.swlist[i];
+		dset->dlist[k].attrs.csweight += dset->dlist[k].attrs.sweight;
+	}
+
+	dset->dlist[dstidx].attrs.csweight -= dset->swdata.swtot;
+}
+
+/** output only the valid destinations in oset */
+static inline int swrr_filter_dests(const ds_set_t *iset, swrr_set_t *oset)
+{
+	unsigned int i, k;
+
+	oset->dlist = pkg_malloc(sizeof(swrr_dest_t) * iset->nr);
+	if (oset->dlist == NULL) {
+		PKG_MEM_ERROR;
+		return -1;
+	}
+
+	for(i = 0, k = 0; i < iset->nr; i++) {
+		if(ds_skip_dst(iset->dlist[i].flags)) {
+			LM_INFO("destination %d in set %d ignored (disabled or inactive)\n",
+					i, iset->id);
+			continue;
+		}
+		if(iset->dlist[i].attrs.sweight < 1) {
+			LM_INFO("destination %d in set %d ignored (sweight < 1)\n",
+					i, iset->id);
+			continue;
+		}
+
+		oset->dlist[k].sweight = iset->dlist[i].attrs.sweight;
+		oset->dlist[k].csweight = 0;
+		oset->dlist[k].index = i;
+		oset->swtot += oset->dlist[k].sweight;
+		k += 1;
+	}
+
+	oset->len = k;
+	return 0;
+}
+
+/** intialize olist depending on the ds_swwr_mode */
+static inline int swrr_init_swlist(swrr_set_t *iset, unsigned int *olist)
+{
+	unsigned int i = 0;
+
+	switch(ds_swrr_mode) {
+		/* swlist is filled with the precalculated swrr distribution */
+		case DS_SWRR_REBALANCE_OFF:
+			olist = shm_malloc(sizeof(unsigned int) * iset->swtot);
+			if (olist == NULL) {
+				SHM_MEM_ERROR;
+				return -1;
+			}
+			for(; i < iset->swtot; i++) {
+				olist[i] = swrr_select_next(iset);
+			}
+			break;
+		/* swlist is filled with the valid destinations */
+		case DS_SWRR_REBALANCE_ON:
+			olist = shm_malloc(sizeof(unsigned int) * iset->len);;
+			if (olist == NULL) {
+				SHM_MEM_ERROR;
+				return -1;
+			}
+			for(; i < iset->len; i++) {
+				olist[i] = iset->dlist[i].index;
+			}
+			break;
+	}
+
+	return 0;
+}
+
+int dp_init_swrr_data(ds_set_t *dset) {
+	unsigned int *old_swlist = NULL;
+	unsigned int *new_swlist = NULL;
+	swrr_set_t swset = {NULL, 0, 0};
+
+    /* argument validation */
+    if (dset == NULL || dset->dlist == NULL || dset->nr < 1) {
+    	goto err1;
+    }
+
+	/* work with local copy of data to prevent sync issues */
+	if (swrr_filter_dests(dset, &swset) == -1) {
+		goto err1;
+	}
+
+	/* if there are no destinations cleanup swdata if previously set and exit */
+    if(swset.len == 0) {
+    	if (dset->swdata.len > 0) {
+    		lock_get(&dset->lock);
+    		if (dset->swdata.swlist != NULL) {
+    			shm_free(dset->swdata.swlist);
+    		}
+    		memset(&dset->swdata, 0, sizeof(ds_swrr_data_t));
+    		lock_release(&dset->lock);
+    	}
+        goto done;
+    }
+
+	/* create a new swlist to work with */
+	if (swrr_init_swlist(&swset, new_swlist) == -1) {
+		goto err2;
+	}
+
+	/* lock and swap pointers as late as possible */
+	lock_get(&dset->lock);
+	old_swlist = dset->swdata.swlist;
+	dset->swdata.swlist = new_swlist;
+	dset->swdata.len = swset.len;
+	dset->swdata.last = 0;
+	dset->swdata.swtot = swset.swtot;
+	lock_release(&dset->lock);
+
+	if (old_swlist != NULL) {
+		shm_free(old_swlist);
+		old_swlist = NULL;
+	}
+	goto done;
+
+err2:
+	pkg_free(swset.dlist);
+err1:
+	return -1;
+done:
+	pkg_free(swset.dlist);
+	return 0;
+}
+
 /*! \brief  compact destinations from sets for fast access */
 int reindex_dests(ds_set_t *node)
 {
@@ -1055,6 +1262,7 @@ int reindex_dests(ds_set_t *node)
 	node->dlist = dp0;
 	dp_init_weights(node);
 	dp_init_relative_weights(node);
+	dp_init_swrr_data(node);
 
 	return 0;
 
@@ -2589,11 +2797,25 @@ int ds_manage_routes_fill_xavp(
 				|| (ds_use_default != 0 && i == (idx->nr - 1))) {
 			continue;
 		}
-		/* max load exceeded per destination */
-		if(rstate->alg == DS_ALG_CALLLOAD && idx->dlist[i].attrs.maxload != 0
-				&& idx->dlist[i].dload >= idx->dlist[i].attrs.maxload) {
-			continue;
+		/* algorithm specific checks */
+		switch(rstate->alg) {
+			case DS_ALG_CALLLOAD:
+				/* max load exceeded per destination */
+				if(idx->dlist[i].attrs.maxload != 0 &&
+					idx->dlist[i].dload >= idx->dlist[i].attrs.maxload) {
+					continue;
+				}
+				break;
+			case DS_ALG_SWRR:
+				/* sweight < 1 destination is ignored */
+				if(idx->dlist[i].attrs.sweight < 1) {
+					continue;
+				}
+				break;
+			default:
+				break;
 		}
+
 		LM_DBG("using entry [%d/%d]\n", rstate->setid, i);
 		if(ds_add_xavp_record(
 				   idx, i, rstate->setid, rstate->alg, &rstate->lxavp)
@@ -2611,10 +2833,23 @@ int ds_manage_routes_fill_xavp(
 				|| (ds_use_default != 0 && i == (idx->nr - 1))) {
 			continue;
 		}
-		/* max load exceeded per destination */
-		if(rstate->alg == DS_ALG_CALLLOAD && idx->dlist[i].attrs.maxload != 0
-				&& idx->dlist[i].dload >= idx->dlist[i].attrs.maxload) {
-			continue;
+		/* algorithm specific checks */
+		switch(rstate->alg) {
+			case DS_ALG_CALLLOAD:
+				/* max load exceeded per destination */
+				if(idx->dlist[i].attrs.maxload != 0 &&
+					idx->dlist[i].dload >= idx->dlist[i].attrs.maxload) {
+					continue;
+					}
+				break;
+			case DS_ALG_SWRR:
+				/* sweight < 1 destination is ignored */
+				if(idx->dlist[i].attrs.sweight < 1) {
+					continue;
+				}
+				break;
+			default:
+				break;
 		}
 		LM_DBG("using entry [%d/%d]\n", rstate->setid, i);
 		if(ds_add_xavp_record(
@@ -2888,6 +3123,24 @@ ds_hres_t ds_manage_routes(sip_msg_t *msg, ds_select_state_t *rstate)
 			xavp_filled = 1;
 			break;
 		/* case DS_ALG_RRSERIAL: // 14 - round-robin or serial decided above */
+		case DS_ALG_SWRR: /* 15 - smooth weighted round-robin distribution */
+			switch(ds_swrr_mode) {
+			case DS_SWRR_REBALANCE_OFF:
+					lock_get(&idx->lock);
+					hash = idx->swdata.swlist[idx->swdata.last];
+					idx->swdata.last = (idx->swdata.last + 1) % idx->swdata.len;
+					lock_release(&idx->lock);
+			case DS_SWRR_REBALANCE_ON:
+					lock_get(&idx->lock);
+					hash = swrr_select_next_dst(idx);
+					lock_release(&idx->lock);
+					break;
+			}
+			lock_get(&idx->lock);
+			hash = idx->swdata.swlist[idx->swdata.last];
+			idx->swdata.last = (idx->swdata.last + 1) % idx->swdata.len;
+			lock_release(&idx->lock);
+			break;
 		case DS_ALG_OVERLOAD: /* 64 - round robin with overload control */
 			lock_get(&idx->lock);
 			hash = idx->last;
@@ -3004,11 +3257,11 @@ ds_hres_t ds_manage_routes(sip_msg_t *msg, ds_select_state_t *rstate)
 
 int ds_update_dst(struct sip_msg *msg, int upos, int mode)
 {
-
-	int ret;
+	int ret, grp;
 	socket_info_t *sock = NULL;
 	sr_xavp_t *rxavp = NULL;
 	sr_xavp_t *lxavp = NULL;
+	ds_set_t *dset = NULL;
 
 	LM_DBG("updating dst\n");
 	if(upos == DS_USE_NEXT) {
@@ -3060,11 +3313,8 @@ next_dst:
 
 	/* call load update if dstid field is set */
 	lxavp = xavp_get(&ds_xavp_dst_dstid, rxavp);
-	if(lxavp == NULL || lxavp->val.type != SR_XTYPE_STR) {
-		/* no dstid field - done */
-		return 1;
-	}
-	if(upos == DS_USE_NEXT) {
+	if(lxavp != NULL && lxavp->val.type == SR_XTYPE_STR &&
+		upos == DS_USE_NEXT) {
 		ret = ds_load_replace(msg, &lxavp->val.v.s);
 		switch(ret) {
 			case 0:
@@ -3078,6 +3328,30 @@ next_dst:
 				return -1;
 		}
 	}
+
+	/* swrr - rebalance csweights on failover if enabled */
+	if(ds_swrr_mode == DS_SWRR_REBALANCE_ON && upos == DS_USE_NEXT) {
+		lxavp = xavp_get_child_with_ival(&ds_xavp_dst, &ds_xavp_dst_grp);
+		if(lxavp == NULL) {
+			LM_ERR("cannot update csweights - grp not found\n");
+			return -1;
+		}
+		grp = (int)lxavp->val.v.l;
+		if(ds_get_index(grp, *ds_crt_idx, &dset) != 0) {
+			LM_ERR("cannot update csweights - dset [%d] not found\n", grp);
+			return -1;
+		}
+		if(dset->swdata.len > 0) {
+			lxavp = xavp_get_child_with_ival(&ds_xavp_dst,
+				&ds_xavp_dst_dstidx);
+			if(lxavp == NULL) {
+				LM_ERR("cannot update csweights - dstidx not found\n");
+				return -1;
+			}
+			swrr_update_csweights(dset, (unsigned int)lxavp->val.v.l);
+		}
+	}
+
 	return 1;
 }
 
@@ -3687,6 +3961,10 @@ int ds_update_state(sip_msg_t *msg, int group, str *address, str *iuid,
 			if(idx->dlist[i].attrs.rweight > 0)
 				ds_reinit_rweight_on_state_change(
 						old_state, idx->dlist[i].flags, idx);
+			if(idx->dlist[i].attrs.sweight > 0) {
+				ds_reinit_sweight_on_state_change(
+					old_state, idx->dlist[i].flags, idx);
+			}
 
 			LM_DBG("old state was %d, set new state to %d\n", old_state,
 					idx->dlist[i].flags);
@@ -3817,6 +4095,23 @@ int ds_reinit_rweight_on_state_change(
 	return 0;
 }
 
+/**
+ * recalculate smooth weight distribution on state change
+ */
+int ds_reinit_sweight_on_state_change(
+		int old_state, int new_state, ds_set_t *dset)
+{
+	if(dset == NULL) {
+		LM_ERR("destination set is null\n");
+		return -1;
+	}
+	if((!ds_skip_dst(old_state) && ds_skip_dst(new_state)) ||
+		(ds_skip_dst(old_state) && !ds_skip_dst(new_state))) {
+		dp_init_swrr_data(dset);
+	}
+
+	return 0;
+}
 
 /**
  *
@@ -3857,6 +4152,10 @@ int ds_reinit_state(int group, str *address, str *iuid, int state)
 			if(idx->dlist[i].attrs.rweight > 0) {
 				ds_reinit_rweight_on_state_change(
 						old_state, idx->dlist[i].flags, idx);
+			}
+			if(idx->dlist[i].attrs.sweight > 0) {
+				ds_reinit_sweight_on_state_change(
+					old_state, idx->dlist[i].flags, idx);
 			}
 
 			return 0;
@@ -3899,6 +4198,10 @@ int ds_reinit_duid_state(int group, str *vduid, int state)
 				ds_reinit_rweight_on_state_change(
 						old_state, idx->dlist[i].flags, idx);
 			}
+			if(idx->dlist[i].attrs.sweight > 0) {
+				ds_reinit_sweight_on_state_change(
+					old_state, idx->dlist[i].flags, idx);
+			}
 
 			return 0;
 		}
@@ -3936,6 +4239,10 @@ int ds_reinit_state_all(int group, int state)
 		if(idx->dlist[i].attrs.rweight > 0) {
 			ds_reinit_rweight_on_state_change(
 					old_state, idx->dlist[i].flags, idx);
+		}
+		if(idx->dlist[i].attrs.sweight > 0) {
+			ds_reinit_sweight_on_state_change(
+				old_state, idx->dlist[i].flags, idx);
 		}
 	}
 	return 0;
@@ -4798,8 +5105,14 @@ void ds_avl_destroy(ds_set_t **node_ptr)
 			dest->attrs.body.s = NULL;
 		}
 	}
-	if(node->dlist != NULL)
+	if(node->dlist != NULL) {
 		shm_free(node->dlist);
+		node->dlist = NULL;
+	}
+	if(node->swdata.swlist != NULL) {
+		shm_free(node->swdata.swlist);
+		node->swdata.swlist = NULL;
+	}
 	shm_free(node);
 
 	*node_ptr = NULL;
