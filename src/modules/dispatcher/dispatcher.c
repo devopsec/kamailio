@@ -683,7 +683,7 @@ static int w_ds_select_addr(
 		l = -1; /* will be casted to a rather big unsigned value */
 	}
 
-	return ds_select_dst_limit(msg, s, a, (unsigned int)l, mode);
+	return ds_select_dst_limit(msg, s, a, (unsigned int)l, mode).ret;
 }
 
 /**
@@ -749,115 +749,7 @@ static int w_ds_select_domain_limit(
 static int ki_ds_select_routes_limit(
 		sip_msg_t *msg, str *srules, str *smode, int rlimit)
 {
-	int i;
-	int vret;
-	int gret;
-	sr_xval_t nxval;
-	ds_select_state_t vstate;
-
-	memset(&vstate, 0, sizeof(ds_select_state_t));
-	vstate.limit = (uint32_t)rlimit;
-	if(vstate.limit == 0) {
-		LM_DBG("Limit set to 0 - forcing to unlimited\n");
-		vstate.limit = 0xffffffff;
-	}
-	vret = -1;
-	gret = -1;
-	i = 0;
-	while(i < srules->len) {
-		vstate.setid = 0;
-		for(; i < srules->len; i++) {
-			if(srules->s[i] < '0' || srules->s[i] > '9') {
-				if(srules->s[i] == '=') {
-					i++;
-					break;
-				} else {
-					LM_ERR("invalid character in [%.*s] at [%d]\n", srules->len,
-							srules->s, i);
-					return -1;
-				}
-			}
-			vstate.setid = (vstate.setid * 10) + (srules->s[i] - '0');
-		}
-		vstate.alg = 0;
-		for(; i < srules->len; i++) {
-			if(srules->s[i] < '0' || srules->s[i] > '9') {
-				if(srules->s[i] == ';') {
-					i++;
-					break;
-				} else {
-					LM_ERR("invalid character in [%.*s] at [%d]\n", srules->len,
-							srules->s, i);
-					return -1;
-				}
-			}
-			vstate.alg = (vstate.alg * 10) + (srules->s[i] - '0');
-		}
-		LM_DBG("routing with setid=%d alg=%d cnt=%d limit=0x%x (%u)\n",
-				vstate.setid, vstate.alg, vstate.cnt, vstate.limit,
-				vstate.limit);
-
-		vstate.umode = DS_SETOP_XAVP;
-		/* if no r-uri/d-uri was set already, keep using the update mode
-		 * specified by the param, then just add to xavps list */
-		if(vstate.emode == 0) {
-			switch(smode->s[0]) {
-				case '0':
-				case 'd':
-				case 'D':
-					vstate.umode = DS_SETOP_DSTURI;
-					break;
-				case '1':
-				case 'r':
-				case 'R':
-					vstate.umode = DS_SETOP_RURI;
-					break;
-				case '2':
-				case 'x':
-				case 'X':
-					break;
-				default:
-					LM_ERR("invalid routing mode parameter: %.*s\n", smode->len,
-							smode->s);
-					return -1;
-			}
-		}
-		vret = ds_manage_routes(msg, &vstate);
-		if(vret < 0) {
-			LM_DBG("failed to select target destinations from %d=%d [%.*s]\n",
-					vstate.setid, vstate.alg, srules->len, srules->s);
-			/* continue to try other target groups */
-		} else {
-			if(vret > 0) {
-				gret = vret;
-			}
-		}
-	}
-
-	if(gret < 0) {
-		/* no selection of a target address */
-		LM_DBG("failed to select any target destinations from [%.*s]\n",
-				srules->len, srules->s);
-		/* return last failure code when trying to select target addresses */
-		return vret;
-	}
-
-	/* add cnt value to xavp */
-	if(((ds_xavp_ctx_mode & DS_XAVP_CTX_SKIP_CNT) == 0)
-			&& (ds_xavp_ctx.len >= 0)) {
-		/* add to xavp the number of selected dst records */
-		memset(&nxval, 0, sizeof(sr_xval_t));
-		nxval.type = SR_XTYPE_LONG;
-		nxval.v.l = vstate.cnt;
-		if(xavp_add_xavp_value(&ds_xavp_ctx, &ds_xavp_ctx_cnt, &nxval, NULL)
-				== NULL) {
-			LM_ERR("failed to add cnt value to xavp\n");
-			return -1;
-		}
-	}
-
-	LM_DBG("selected target destinations: %d\n", vstate.cnt);
-	return gret;
+	return ds_select_routes_limit(msg, srules, smode, rlimit).ret;
 }
 
 /**
@@ -1704,7 +1596,7 @@ error:
 static int ki_ds_select(sip_msg_t *msg, int set, int alg)
 {
 	return ds_select_dst_limit(msg, set, alg, 0xffff /* limit number of dst*/,
-			2 /*set no dst/uri*/);
+			2 /*set no dst/uri*/).ret;
 }
 
 /**
@@ -1713,7 +1605,7 @@ static int ki_ds_select(sip_msg_t *msg, int set, int alg)
 static int ki_ds_select_limit(sip_msg_t *msg, int set, int alg, int limit)
 {
 	return ds_select_dst_limit(msg, set, alg, limit /* limit number of dst*/,
-			2 /*set no dst/uri*/);
+			2 /*set no dst/uri*/).ret;
 }
 
 /**
@@ -1721,8 +1613,9 @@ static int ki_ds_select_limit(sip_msg_t *msg, int set, int alg, int limit)
  */
 static int ki_ds_select_dst(sip_msg_t *msg, int set, int alg)
 {
-	return ds_select_dst_limit(
-			msg, set, alg, 0xffff /* limit number of dst*/, 0 /*set dst uri*/);
+	return ds_select_dst_limit(msg, set, alg,
+		0xffff /* limit number of dst*/,
+		0 /*set dst uri*/).ret;
 }
 
 /**
@@ -1730,8 +1623,9 @@ static int ki_ds_select_dst(sip_msg_t *msg, int set, int alg)
  */
 static int ki_ds_select_dst_limit(sip_msg_t *msg, int set, int alg, int limit)
 {
-	return ds_select_dst_limit(
-			msg, set, alg, limit /* limit number of dst*/, 0 /*set dst uri*/);
+	return ds_select_dst_limit(msg, set, alg,
+		limit /* limit number of dst*/,
+		0 /*set dst uri*/).ret;
 }
 
 /**
@@ -1739,8 +1633,9 @@ static int ki_ds_select_dst_limit(sip_msg_t *msg, int set, int alg, int limit)
  */
 static int ki_ds_select_domain(sip_msg_t *msg, int set, int alg)
 {
-	return ds_select_dst_limit(msg, set, alg, 0xffff /* limit number of dst*/,
-			1 /*set host port*/);
+	return ds_select_dst_limit(msg, set, alg,
+		0xffff /* limit number of dst*/,
+		1 /*set host port*/).ret;
 }
 
 /**
@@ -1749,8 +1644,9 @@ static int ki_ds_select_domain(sip_msg_t *msg, int set, int alg)
 static int ki_ds_select_domain_limit(
 		sip_msg_t *msg, int set, int alg, int limit)
 {
-	return ds_select_dst_limit(
-			msg, set, alg, limit /* limit number of dst*/, 1 /*set host port*/);
+	return ds_select_dst_limit(msg, set, alg,
+		limit /* limit number of dst*/,
+		1 /*set host port*/).ret;
 }
 
 /**
