@@ -39,9 +39,11 @@
 #include "../../core/locking.h"
 #include "../../core/kemi.h"
 #include "../../core/mod_fix.h"
+#include "../../core/cfg/cfg.h"
 #include "ip_tree.h"
 #include "timer.h"
 #include "pike_funcs.h"
+#include "pike_config.h"
 #include "../../core/rpc_lookup.h"
 #include "pike_rpc.h"
 
@@ -53,9 +55,6 @@ void pike_exit(void);
 
 
 /* parameters */
-static int pike_time_unit = 2;
-static int pike_max_reqs = 30;
-int pike_timeout = 120;
 int pike_log_level = L_WARN;
 
 /* global variables */
@@ -72,9 +71,9 @@ static cmd_export_t cmds[] = {
 };
 
 static param_export_t params[] = {
-	{"sampling_time_unit", PARAM_INT, &pike_time_unit},
-	{"reqs_density_per_unit", PARAM_INT, &pike_max_reqs},
-	{"remove_latency", PARAM_INT, &pike_timeout},
+	{"sampling_time_unit", PARAM_INT, &default_pike_cfg.sampling_time_unit},
+	{"reqs_density_per_unit", PARAM_INT, &default_pike_cfg.reqs_density_per_unit},
+	{"remove_latency", PARAM_INT, &default_pike_cfg.remove_latency},
 	{"pike_log_level", PARAM_INT, &pike_log_level},
 	{0, 0, 0}
 };
@@ -97,6 +96,12 @@ static int pike_init(void)
 {
 	LOG(L_INFO, "PIKE - initializing\n");
 
+	if(cfg_declare("pike", pike_cfg_def, &default_pike_cfg, cfg_sizeof(pike),
+			   &pike_cfg)) {
+		LM_ERR("failed to declare the configuration\n");
+		return -1;
+	}
+
 	if(rpc_register_array(pike_rpc_methods) != 0) {
 		LM_ERR("failed to register RPC commands\n");
 		return -1;
@@ -115,7 +120,7 @@ static int pike_init(void)
 	}
 
 	/* init the IP tree */
-	if(init_ip_tree(pike_max_reqs) != 0) {
+	if(init_ip_tree() != 0) {
 		LM_ERR(" ip_tree creation failed!\n");
 		goto error2;
 	}
@@ -130,7 +135,10 @@ static int pike_init(void)
 
 	/* registering timing functions  */
 	register_timer(clean_routine, 0, 1);
-	register_timer(swap_routine, 0, pike_time_unit);
+	/* swap_routine is registered with a fixed base interval; the actual
+	 * sampling window is tracked internally against the live
+	 * sampling_time_unit cfg value, so it can be changed at runtime */
+	register_timer(swap_routine, 0, 1);
 
 	/* Register counter */
 	pike_counter_init();

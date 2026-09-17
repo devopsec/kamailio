@@ -76,6 +76,11 @@
 			Default value is <quote>2</quote>.
 		</emphasis>
 		</para>
+        <para>
+        This parameter is runtime-changeable using <command>kamcmd cfg.seti pike sampling_time_unit &lt;value&gt;
+        </command> and can be inspected via <command>kamcmd cfg.get pike sampling_time_unit</command>. Changes take
+        effect on subsequent refresh decisions, not retroactively.
+        </para>
 		<example>
 		<title>Set <varname>sampling_time_unit</varname> parameter</title>
 		<programlisting format="linespecific">
@@ -97,6 +102,10 @@ modparam("pike", "sampling_time_unit", 10)
 		<emphasis>
 			Default value is 30.
 		</emphasis>
+        </para>
+        <para>
+        This parameter is runtime-changeable using <command>kamcmd cfg.seti pike reqs_density_per_unit &lt;value&gt;
+        </command> and can be inspected via <command>kamcmd cfg.get pike reqs_density_per_unit</command>.
 		</para>
 		<example>
 		<title>Set <varname>reqs_density_per_unit</varname> parameter</title>
@@ -122,6 +131,10 @@ modparam("pike", "reqs_density_per_unit", 30)
 		<emphasis>
 			Default value is 120.
 		</emphasis>
+        </para>
+        <para>
+        This parameter is runtime-changeable using <command>kamcmd cfg.seti pike remove_latency &lt;value&gt;</command>
+        and can be inspected via <command>kamcmd cfg.get pike remove_latency</command>.
 		</para>
 		<example>
 		<title>Set <varname>remove_latency</varname> parameter</title>

@@ -36,12 +36,12 @@
 #include "../../core/mod_fix.h"
 #include "ip_tree.h"
 #include "pike_funcs.h"
+#include "pike_config.h"
 #include "timer.h"
 
 
 extern gen_lock_t *pike_timer_lock;
 extern pike_list_link_t *pike_timer;
-extern int pike_timeout;
 extern int pike_log_level;
 
 counter_handle_t blocked;
@@ -80,7 +80,7 @@ int pike_check_ipaddr(sip_msg_t *msg, ip_addr_t *ip)
 	if(flags & NEW_NODE) {
 		/* put this node into the timer list and remove its
 		 * father only if this has one kid and is not a LEAF_NODE*/
-		node->expires = get_ticks() + pike_timeout;
+		node->expires = get_ticks() + cfg_get(pike, pike_cfg, remove_latency);
 		append_to_timer(pike_timer, &(node->timer_ll));
 		node->flags |= NODE_INTIMER_FLAG;
 		if(father) {
@@ -113,7 +113,8 @@ int pike_check_ipaddr(sip_msg_t *msg, ip_addr_t *ip)
 			/* if node expired, ignore the current hit and let is
 			 * expire in timer process */
 			if(!(flags & NO_UPDATE) && !(node->flags & NODE_EXPIRED_FLAG)) {
-				node->expires = get_ticks() + pike_timeout;
+				node->expires =
+						get_ticks() + cfg_get(pike, pike_cfg, remove_latency);
 				update_in_timer(pike_timer, &(node->timer_ll));
 			}
 		} else {
@@ -271,8 +272,8 @@ void clean_routine(unsigned int ticks, void *param)
 				node->flags &= ~NODE_IPLEAF_FLAG;
 				node->leaf_hits[CURR_POS] = 0;
 			} else {
-				/* if the node has no prev, means it is a top branch node -> just
-				 * removed and destroy it */
+				/* if the node has no prev, means it is a top branch node
+				 * -> just removed and destroy it */
 				if(node->prev != 0) {
 					/* if this is the last kid, we have to put the father
 					 * into timer list */
@@ -283,7 +284,9 @@ void clean_routine(unsigned int ticks, void *param)
 						 * (in this case, it's already there) */
 						if(!(dad->flags & NODE_IPLEAF_FLAG)) {
 							lock_get(pike_timer_lock);
-							dad->expires = get_ticks() + pike_timeout;
+							dad->expires =
+									get_ticks()
+									+ cfg_get(pike, pike_cfg, remove_latency);
 							assert(!has_timer_set(&(dad->timer_ll)));
 							append_to_timer(pike_timer, &(dad->timer_ll));
 							dad->flags |= NODE_INTIMER_FLAG;
@@ -324,15 +327,40 @@ void swap_routine(unsigned int ticks, void *param)
 {
 	pike_ip_node_t *node;
 	int i;
+	int stu;
+	static unsigned int swap_last_run = 0;
+	static int swap_initialized = 0;
 
-	/* LM_DBG("entering \n"); */
+	/* the timer is registered with a fixed 1-tick base interval; track
+	 * elapsed ticks internally so that the sampling window
+	 * (sampling_time_unit) can be changed at runtime without having to
+	 * re-register the core timer */
+	stu = cfg_get(pike, pike_cfg, sampling_time_unit);
+	if(stu < 1)
+		stu = 1;
+
+	if(!swap_initialized) {
+		/* first run - just record the reference tick, avoid an immediate
+		 * refresh right after startup */
+		swap_last_run = ticks;
+		swap_initialized = 1;
+		return;
+	}
+
+	if((ticks - swap_last_run) < (unsigned int)stu) {
+		return;
+	}
+
+	swap_last_run = ticks;
+
 	for(i = 0; i < MAX_IP_BRANCHES; i++) {
 		node = get_tree_branch(i);
 		if(node) {
 			lock_tree_branch(i);
 			node = get_tree_branch(i); /* again, to avoid races */
-			if(node)
+			if(node) {
 				refresh_node(node);
+			}
 			unlock_tree_branch(i);
 		}
 	}

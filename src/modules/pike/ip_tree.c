@@ -31,6 +31,7 @@
 #include "../../core/dprint.h"
 #include "../../core/mem/shm_mem.h"
 #include "ip_tree.h"
+#include "pike_config.h"
 
 
 static pike_ip_tree_t *pike_root = 0;
@@ -105,7 +106,7 @@ static gen_lock_set_t *init_lock_set(int *size)
 
 
 /* Builds and Inits a new IP tree */
-int init_ip_tree(int maximum_hits)
+int init_ip_tree(void)
 {
 	int size;
 	int i;
@@ -131,8 +132,6 @@ int init_ip_tree(int maximum_hits)
 		pike_root->entries[i].lock_idx = i % size;
 	}
 
-	pike_root->max_hits = maximum_hits;
-
 	return 0;
 error:
 	if(pike_root) {
@@ -144,7 +143,7 @@ error:
 
 unsigned int get_max_hits()
 {
-	return (pike_root != 0) ? pike_root->max_hits : -1;
+	return (pike_root != 0) ? cfg_get(pike, pike_cfg, reqs_density_per_unit) : -1;
 }
 
 /* destroy an ip_node and all nodes under it; the nodes must be first removed
@@ -233,21 +232,25 @@ pike_ip_node_t *split_node(pike_ip_node_t *dad, unsigned char byte)
 }
 
 
-#define is_hot_non_leaf(_node)                                            \
-	((_node)->hits[PREV_POS] >= pike_root->max_hits >> 2                  \
-			|| (_node)->hits[CURR_POS] >= pike_root->max_hits >> 2        \
-			|| (((_node)->hits[PREV_POS] + (_node)->hits[CURR_POS]) >> 1) \
-					   >= pike_root->max_hits >> 2)
+#define is_hot_non_leaf(_node)                                              \
+	((_node)->hits[PREV_POS] >= cfg_get(pike, pike_cfg, reqs_density_per_unit) >> 2   \
+			|| (_node)->hits[CURR_POS]                                      \
+					   >= cfg_get(pike, pike_cfg, reqs_density_per_unit) >> 2 \
+			|| (((_node)->hits[PREV_POS] + (_node)->hits[CURR_POS]) >> 1)   \
+					   >= cfg_get(pike, pike_cfg, reqs_density_per_unit) >> 2)
 
 #define is_hot_leaf(_node)                                                    \
-	((_node)->leaf_hits[PREV_POS] >= pike_root->max_hits                      \
-			|| (_node)->leaf_hits[CURR_POS] >= pike_root->max_hits            \
+	((_node)->leaf_hits[PREV_POS]                                             \
+					>= cfg_get(pike, pike_cfg, reqs_density_per_unit)         \
+			|| (_node)->leaf_hits[CURR_POS]                                   \
+					   >= cfg_get(pike, pike_cfg, reqs_density_per_unit)      \
 			|| (((_node)->leaf_hits[PREV_POS] + (_node)->leaf_hits[CURR_POS]) \
 					   >> 1)                                                  \
-					   >= pike_root->max_hits)
+					   >= cfg_get(pike, pike_cfg, reqs_density_per_unit))
 
-#define is_warm_leaf(_node) \
-	((_node)->hits[CURR_POS] >= pike_root->max_hits >> 2)
+#define is_warm_leaf(_node)                                          \
+	((_node)->hits[CURR_POS]                                        \
+			>= cfg_get(pike, pike_cfg, reqs_density_per_unit) >> 2)
 
 #define MAX_TYPE_VAL(_x) \
 	(((1 << (8 * sizeof(_x) - 1)) - 1) | ((1 << (8 * sizeof(_x) - 1))))

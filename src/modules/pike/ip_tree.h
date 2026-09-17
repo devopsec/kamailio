@@ -68,7 +68,6 @@ typedef struct ip_tree
 		pike_ip_node_t *node;
 		int lock_idx;
 	} entries[MAX_IP_BRANCHES];
-	unsigned short max_hits;
 	gen_lock_set_t *entry_lock_set;
 } pike_ip_tree_t;
 
@@ -78,7 +77,7 @@ typedef struct ip_tree
 						- (unsigned long)(&((pike_ip_node_t *)0)->timer_ll)))
 
 
-int init_ip_tree(int);
+int init_ip_tree(void);
 void destroy_ip_tree(void);
 pike_ip_node_t *mark_node(unsigned char *ip, int ip_len,
 		pike_ip_node_t **father, unsigned char *flag);
